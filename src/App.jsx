@@ -1,85 +1,68 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  Plus, 
-  FileText, 
-  Image as ImageIcon, 
-  Box, 
-  Upload, 
-  Download, 
-  CheckCircle, 
-  Clock, 
-  MoreHorizontal, 
-  X,
-  Eye,
-  File
+  Plus, FileText, Image as ImageIcon, Box, Upload, Download, 
+  CheckCircle, Clock, MoreHorizontal, X, Eye, File, 
+  LayoutDashboard, Users, Settings, LogOut, Search, 
+  MessageSquare, ChevronRight, PieChart, Activity, Link as LinkIcon
 } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, signInAnonymously, onAuthStateChanged, updateProfile, signOut, signInWithCustomToken 
+} from 'firebase/auth';
+import { 
+  getFirestore, collection, doc, addDoc, updateDoc, 
+  onSnapshot, query, serverTimestamp, setDoc, getDoc, deleteDoc 
+} from 'firebase/firestore';
+import * as THREE from 'three';
 
-// 注意：Three.js 将通过动态脚本加载，而不是 import
-// 移除: import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
+// --- Firebase Configuration & Init ---
+// 自动获取环境配置，如果不可用则使用空配置（会报错提示）
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app';
 
-// --- 模拟数据 ---
-const INITIAL_PROJECTS = [
-  {
-    id: 1,
-    title: "新款智能手表外壳设计",
-    status: "in_progress",
-    date: "2023-10-24",
-    description: "需要设计一款运动风格的手表外壳，材质为铝合金，需要包含按键位置。",
-    inputs: [
-      { type: 'text', content: '参考竞品：Apple Watch Ultra 的倒角设计。' },
-      { type: 'image', name: '参考草图.png', url: 'https://placehold.co/600x400/e2e8f0/1e293b?text=Sketch+Reference' },
-      { type: 'ppt', name: '产品需求文档_v1.pptx' }
-    ],
-    outputs: [
-      { type: 'text', content: '初步建模已完成，请查看附件。' },
-      { type: 'stp', name: 'Watch_Case_v1.stp' } // 3D文件
-    ]
-  },
-  {
-    id: 2,
-    title: "工业机械臂底座支架",
-    status: "pending",
-    date: "2023-10-25",
-    description: "承重50kg的机械臂底座，需要考虑4个M10螺栓孔位。",
-    inputs: [
-      { type: 'ppt', name: '技术参数规格书.pdf' }
-    ],
-    outputs: []
-  }
-];
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
 
-// --- 3D Viewer Component (Three.js) ---
-const ThreeViewer = ({ isActive }) => {
+// --- Constants & Utilities ---
+const COLLECTIONS = {
+  PROJECTS: 'projects',
+  USERS: 'users',
+  LOGS: 'activity_logs'
+};
+
+const ROLES = {
+  MANAGER: { label: '产品经理', color: 'bg-indigo-100 text-indigo-700' },
+  DESIGNER: { label: '设计师', color: 'bg-pink-100 text-pink-700' },
+  ENGINEER: { label: '工程师', color: 'bg-blue-100 text-blue-700' },
+  GUEST: { label: '访客', color: 'bg-slate-100 text-slate-700' }
+};
+
+const STATUS_MAP = {
+  pending: { label: '待处理', color: 'bg-yellow-100 text-yellow-800', icon: Clock },
+  in_progress: { label: '进行中', color: 'bg-blue-100 text-blue-800', icon: Activity },
+  review: { label: '审核中', color: 'bg-purple-100 text-purple-800', icon: Eye },
+  completed: { label: '已完成', color: 'bg-green-100 text-green-800', icon: CheckCircle }
+};
+
+// 安全的 Firestore 路径生成器 (遵循规则1)
+const getCollectionPath = (collectionName) => {
+  return collection(db, 'artifacts', appId, 'public', 'data', collectionName);
+};
+
+// --- Components ---
+
+// 1. 3D Viewer (Three.js) - 保持原有逻辑，增加加载状态
+const ThreeViewer = ({ isActive, modelUrl }) => {
   const mountRef = useRef(null);
-  const [isLibLoaded, setIsLibLoaded] = useState(false);
-
-  // 动态加载 Three.js 脚本
+  
   useEffect(() => {
-    if (window.THREE) {
-      setIsLibLoaded(true);
-      return;
-    }
+    if (!isActive || !mountRef.current) return;
 
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    script.async = true;
-    script.onload = () => setIsLibLoaded(true);
-    document.body.appendChild(script);
-
-    return () => {
-      // 脚本通常保留在页面中以便缓存，此处不做移除
-    };
-  }, []);
-
-  useEffect(() => {
-    // 只有在激活且库加载完成后才初始化
-    if (!isActive || !mountRef.current || !isLibLoaded) return;
-
-    const THREE = window.THREE;
-
-    // Scene Setup
+    // Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf1f5f9); // Slate-100
+    scene.background = new THREE.Color(0xf8fafc); // Slate-50
 
     // Camera
     const width = mountRef.current.clientWidth;
@@ -88,40 +71,36 @@ const ThreeViewer = ({ isActive }) => {
     camera.position.z = 5;
 
     // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     mountRef.current.appendChild(renderer.domElement);
 
     // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(5, 10, 7.5);
     scene.add(directionalLight);
 
-    // Mesh (Simulating an uploaded .stp part)
-    // We create a complex shape to look like a mechanical part
+    // Placeholder Mesh (模拟模型加载)
     const geometry = new THREE.TorusKnotGeometry(1.2, 0.4, 100, 16);
     const material = new THREE.MeshStandardMaterial({ 
-      color: 0x3b82f6, 
-      metalness: 0.5, 
-      roughness: 0.1,
-      wireframe: false
+      color: 0x3b82f6, metalness: 0.6, roughness: 0.2 
     });
-    const cube = new THREE.Mesh(geometry, material);
-    scene.add(cube);
+    const mesh = new THREE.Mesh(geometry, material);
+    scene.add(mesh);
 
-    // Animation Loop
+    // Animation
     let animationId;
     const animate = () => {
       animationId = requestAnimationFrame(animate);
-      cube.rotation.x += 0.01;
-      cube.rotation.y += 0.01;
+      mesh.rotation.x += 0.005;
+      mesh.rotation.y += 0.01;
       renderer.render(scene, camera);
     };
     animate();
 
-    // Handle Resize
+    // Resize
     const handleResize = () => {
       if (!mountRef.current) return;
       const w = mountRef.current.clientWidth;
@@ -132,7 +111,6 @@ const ThreeViewer = ({ isActive }) => {
     };
     window.addEventListener('resize', handleResize);
 
-    // Cleanup
     return () => {
       cancelAnimationFrame(animationId);
       window.removeEventListener('resize', handleResize);
@@ -142,360 +120,882 @@ const ThreeViewer = ({ isActive }) => {
       geometry.dispose();
       material.dispose();
     };
-  }, [isActive, isLibLoaded]);
+  }, [isActive, modelUrl]);
 
-  if (!isLibLoaded) {
-    return (
-      <div className="w-full h-full flex items-center justify-center text-slate-400">
-        加载 3D 引擎中...
-      </div>
-    );
-  }
-
-  return <div ref={mountRef} className="w-full h-full rounded-lg shadow-inner" />;
+  return <div ref={mountRef} className="w-full h-full rounded-lg bg-slate-50" />;
 };
 
-// --- Main Application Component ---
-export default function RequirementApp() {
-  const [projects, setProjects] = useState(INITIAL_PROJECTS);
+// 2. Main App Component
+export default function RequirementSystemPro() {
+  const [user, setUser] = useState(null);
+  const [userData, setUserData] = useState(null); // Firestore user profile
+  const [projects, setProjects] = useState([]);
+  const [usersMap, setUsersMap] = useState({}); // Cache for user names
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedProject, setSelectedProject] = useState(null);
-  const [viewMode, setViewMode] = useState('list'); // 'list' or 'detail' or 'create'
-  
-  // Create Form State
-  const [newProjectTitle, setNewProjectTitle] = useState('');
-  const [newProjectDesc, setNewProjectDesc] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  // 3D Preview State
-  const [show3DPreview, setShow3DPreview] = useState(false);
-  const [currentStpFile, setCurrentStpFile] = useState('');
-
-  const handleOpenProject = (project) => {
-    setSelectedProject(project);
-    setViewMode('detail');
-    setShow3DPreview(false);
-  };
-
-  const handleCreateProject = () => {
-    const newProj = {
-      id: projects.length + 1,
-      title: newProjectTitle || "未命名项目",
-      status: "pending",
-      date: new Date().toISOString().split('T')[0],
-      description: newProjectDesc,
-      inputs: [],
-      outputs: []
+  // Auth Initialization
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        // 优先检查是否有初始 Token
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+           await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+           await signInAnonymously(auth);
+        }
+      } catch(e) {
+        console.error("Auth failed, falling back to anon", e);
+        // 如果 custom token 失败，尝试匿名登录作为后备
+        try {
+           await signInAnonymously(auth);
+        } catch (anonErr) {
+           console.error("Anonymous auth also failed", anonErr);
+        }
+      }
     };
-    setProjects([newProj, ...projects]);
-    setViewMode('list');
-    setNewProjectTitle('');
-    setNewProjectDesc('');
-  };
+    initAuth();
 
-  const handleAddOutput = (type) => {
-    if (!selectedProject) return;
-    
-    let newOutput;
-    if (type === 'stp') {
-      newOutput = { type: 'stp', name: `Design_Review_v${selectedProject.outputs.length + 1}.stp` };
-    } else if (type === 'text') {
-      newOutput = { type: 'text', content: '新的设计反馈已更新。' };
-    } else {
-      newOutput = { type: 'image', name: 'render.png', url: 'https://placehold.co/100x100' };
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        // Fetch extended user profile
+        const userRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, currentUser.uid);
+        // We use onSnapshot for user profile to get real-time role updates
+        onSnapshot(userRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setUserData(docSnap.data());
+          } else {
+            // Create default profile if not exists
+            const defaultProfile = {
+              uid: currentUser.uid,
+              name: `User-${currentUser.uid.substring(0,4)}`,
+              role: 'GUEST',
+              avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.uid}`,
+              joinedAt: serverTimestamp()
+            };
+            setDoc(userRef, defaultProfile);
+            setUserData(defaultProfile);
+          }
+        });
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Data Fetching (Projects & Users)
+  useEffect(() => {
+    if (!user) return;
+
+    // Fetch Projects
+    const projectsQuery = getCollectionPath(COLLECTIONS.PROJECTS);
+    const unsubProjects = onSnapshot(projectsQuery, (snapshot) => {
+      const projs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Client-side sort by date desc
+      projs.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+      setProjects(projs);
+    }, (error) => console.error("Error fetching projects:", error));
+
+    // Fetch All Users (for mapping IDs to names)
+    const usersQuery = getCollectionPath(COLLECTIONS.USERS);
+    const unsubUsers = onSnapshot(usersQuery, (snapshot) => {
+      const mapping = {};
+      snapshot.docs.forEach(doc => {
+        mapping[doc.id] = doc.data();
+      });
+      setUsersMap(mapping);
+    }, (error) => console.error("Error fetching users:", error));
+
+    return () => {
+      unsubProjects();
+      unsubUsers();
+    };
+  }, [user]);
+
+  // --- Actions ---
+
+  const handleCreateProject = async (data) => {
+    if (!user) return;
+    try {
+      await addDoc(getCollectionPath(COLLECTIONS.PROJECTS), {
+        ...data,
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        status: 'pending',
+        inputs: [], // Array of input files
+        outputs: [], // Array of output files
+        comments: [] // Simple comments array
+      });
+      setActiveTab('projects');
+    } catch (error) {
+      console.error("Error creating project:", error);
+      alert("创建失败，请重试");
     }
-
-    const updatedProject = {
-      ...selectedProject,
-      outputs: [...selectedProject.outputs, newOutput]
-    };
-
-    setProjects(projects.map(p => p.id === updatedProject.id ? updatedProject : p));
-    setSelectedProject(updatedProject);
   };
 
-  const StatusBadge = ({ status }) => {
-    const styles = {
-      pending: "bg-yellow-100 text-yellow-800",
-      in_progress: "bg-blue-100 text-blue-800",
-      completed: "bg-green-100 text-green-800"
-    };
-    const labels = {
-      pending: "待处理",
-      in_progress: "进行中",
-      completed: "已完成"
-    };
-    return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status]}`}>
-        {labels[status]}
-      </span>
-    );
+  const handleUpdateStatus = async (projectId, newStatus) => {
+    if (!user) return;
+    try {
+      const projectRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.PROJECTS, projectId);
+      await updateDoc(projectRef, {
+        status: newStatus,
+        updatedAt: serverTimestamp()
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleAddFile = async (projectId, fileData, type = 'inputs') => {
+    // fileData: { name, url, fileType, format }
+    if (!selectedProject || !user) return;
+    
+    try {
+      const projectRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.PROJECTS, projectId);
+      const newFile = {
+        ...fileData,
+        id: crypto.randomUUID(),
+        addedBy: user.uid,
+        addedAt: new Date().toISOString()
+      };
+      
+      // Update the specific array
+      const currentList = selectedProject[type] || [];
+      await updateDoc(projectRef, {
+        [type]: [...currentList, newFile],
+        updatedAt: serverTimestamp()
+      });
+    } catch (e) {
+      console.error(e);
+      alert("添加文件失败");
+    }
+  };
+
+  const handleDeleteProject = async (projectId) => {
+    if (!user) return;
+    if (confirm('确定要删除这个项目吗？此操作不可恢复。')) {
+      try {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.PROJECTS, projectId));
+        if (selectedProject?.id === projectId) setSelectedProject(null);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  const handleUpdateProfile = async (name, role) => {
+    if (!user) return;
+    try {
+      const userRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid);
+      await updateDoc(userRef, { name, role });
+      alert("个人资料已更新");
+    } catch(e) {
+      console.error(e);
+    }
   };
 
   // --- Views ---
 
-  const ListView = () => (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-800">项目列表</h2>
-          <p className="text-slate-500 text-sm">管理您的所有设计需求与交付</p>
-        </div>
-        <button 
-          onClick={() => setViewMode('create')}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus size={20} /> 新建需求
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {projects.map(project => (
-          <div 
-            key={project.id} 
-            onClick={() => handleOpenProject(project)}
-            className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group"
-          >
-            <div className="flex justify-between items-start mb-4">
-              <div className="p-2 bg-slate-100 rounded-lg group-hover:bg-blue-50 transition-colors">
-                <Box className="text-slate-600 group-hover:text-blue-600" size={24} />
-              </div>
-              <StatusBadge status={project.status} />
-            </div>
-            <h3 className="text-lg font-semibold text-slate-900 mb-2">{project.title}</h3>
-            <p className="text-slate-500 text-sm mb-4 line-clamp-2">{project.description}</p>
-            <div className="flex items-center gap-4 text-xs text-slate-400 border-t border-slate-100 pt-4">
-              <span className="flex items-center gap-1"><FileText size={14}/> {project.inputs.length} 输入</span>
-              <span className="flex items-center gap-1"><CheckCircle size={14}/> {project.outputs.length} 交付</span>
-              <span className="ml-auto flex items-center gap-1"><Clock size={14}/> {project.date}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
-  const CreateView = () => (
-    <div className="max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-lg border border-slate-200">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-slate-800">提交新需求</h2>
-        <button onClick={() => setViewMode('list')} className="text-slate-400 hover:text-slate-600">
-          <X size={24} />
-        </button>
-      </div>
-      
-      <div className="space-y-6">
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">项目标题</label>
-          <input 
-            type="text" 
-            value={newProjectTitle}
-            onChange={(e) => setNewProjectTitle(e.target.value)}
-            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            placeholder="例如：新型发动机连杆设计"
-          />
-        </div>
-        
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">详细描述</label>
-          <textarea 
-            rows={5}
-            value={newProjectDesc}
-            onChange={(e) => setNewProjectDesc(e.target.value)}
-            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            placeholder="请描述具体的设计要求、材质偏好、尺寸限制等..."
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">附件上传 (支持 PPT, 图片)</label>
-          <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:bg-slate-50 cursor-pointer transition-colors">
-            <Upload className="mx-auto h-12 w-12 text-slate-400 mb-2" />
-            <p className="text-slate-600">点击或拖拽文件到此处</p>
-            <p className="text-xs text-slate-400 mt-1">支持 .png, .jpg, .pptx, .pdf</p>
-          </div>
-        </div>
-
-        <div className="flex gap-4 pt-4">
-          <button 
-            onClick={handleCreateProject}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition-colors"
-          >
-            提交需求
-          </button>
-          <button 
-            onClick={() => setViewMode('list')}
-            className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg font-medium transition-colors"
-          >
-            取消
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  const DetailView = () => {
-    if (!selectedProject) return null;
-
-    return (
-      <div className="h-[calc(100vh-100px)] flex flex-col gap-6">
-        {/* Header */}
-        <div className="flex items-center gap-4 border-b border-slate-200 pb-4">
-          <button onClick={() => setViewMode('list')} className="p-2 hover:bg-slate-100 rounded-full">
-            <div className="rotate-180"><MoreHorizontal size={20}/></div> {/* Simple back simulation */}
-            <span className="text-sm font-bold text-slate-500">返回</span>
-          </button>
-          <div>
-            <h1 className="text-xl font-bold text-slate-900">{selectedProject.title}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <StatusBadge status={selectedProject.status} />
-              <span className="text-xs text-slate-500">创建于 {selectedProject.date}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-hidden">
-          
-          {/* LEFT COLUMN: Input / Requirements */}
-          <div className="flex flex-col gap-4 overflow-y-auto pr-2">
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-              <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                <FileText className="text-blue-500" size={20}/> 需求详情
-              </h3>
-              <p className="text-slate-600 whitespace-pre-wrap">{selectedProject.description}</p>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-              <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                <Upload className="text-blue-500" size={20}/> 输入附件 (Input)
-              </h3>
-              <div className="space-y-3">
-                {selectedProject.inputs.map((item, idx) => (
-                  <div key={idx} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg border border-slate-100">
-                    {item.type === 'image' && <ImageIcon className="text-purple-500" size={24}/>}
-                    {item.type === 'ppt' && <File className="text-orange-500" size={24}/>}
-                    {item.type === 'text' && <FileText className="text-slate-500" size={24}/>}
-                    
-                    <div className="flex-1 overflow-hidden">
-                      <p className="text-sm font-medium text-slate-700 truncate">{item.name || "文本补充"}</p>
-                      {item.type === 'text' && <p className="text-xs text-slate-500 truncate">{item.content}</p>}
-                    </div>
-                    {item.url && (
-                       <a href={item.url} target="_blank" rel="noreferrer" className="text-blue-500 text-xs hover:underline">预览</a>
-                    )}
-                  </div>
-                ))}
-                {selectedProject.inputs.length === 0 && <p className="text-slate-400 text-sm">无附件输入</p>}
-              </div>
-            </div>
-          </div>
-
-          {/* RIGHT COLUMN: Output / Deliverables */}
-          <div className="flex flex-col gap-4 overflow-y-auto pr-2">
-            <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 flex-1 flex flex-col">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="font-semibold text-slate-800 flex items-center gap-2">
-                  <Box className="text-green-600" size={20}/> 交付成果 (Output)
-                </h3>
-                <div className="flex gap-2">
-                  <button onClick={() => handleAddOutput('text')} className="p-2 bg-white rounded shadow-sm hover:bg-slate-100 text-slate-600" title="添加文本"><FileText size={16}/></button>
-                  <button onClick={() => handleAddOutput('image')} className="p-2 bg-white rounded shadow-sm hover:bg-slate-100 text-slate-600" title="添加图片"><ImageIcon size={16}/></button>
-                  <button onClick={() => handleAddOutput('stp')} className="p-2 bg-white rounded shadow-sm hover:bg-slate-100 text-slate-600" title="添加STP模型"><Box size={16}/></button>
-                </div>
-              </div>
-
-              {/* Output List */}
-              <div className="space-y-3 mb-6">
-                {selectedProject.outputs.map((item, idx) => (
-                  <div key={idx} className="group relative bg-white p-4 rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex items-start gap-3">
-                      {item.type === 'stp' && <div className="p-2 bg-blue-100 rounded text-blue-600"><Box size={20}/></div>}
-                      {item.type === 'image' && <div className="p-2 bg-purple-100 rounded text-purple-600"><ImageIcon size={20}/></div>}
-                      {item.type === 'text' && <div className="p-2 bg-slate-100 rounded text-slate-600"><FileText size={20}/></div>}
-                      
-                      <div className="flex-1">
-                         {item.type === 'text' ? (
-                           <p className="text-sm text-slate-700">{item.content}</p>
-                         ) : (
-                           <div>
-                             <p className="text-sm font-medium text-slate-800">{item.name}</p>
-                             <p className="text-xs text-slate-500 uppercase">{item.type} 文件</p>
-                           </div>
-                         )}
-                      </div>
-
-                      {item.type === 'stp' && (
-                        <button 
-                          onClick={() => { setShow3DPreview(true); setCurrentStpFile(item.name); }}
-                          className="flex items-center gap-1 text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700"
-                        >
-                          <Eye size={12}/> 3D预览
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {selectedProject.outputs.length === 0 && (
-                  <div className="text-center py-10 text-slate-400">
-                    <p>暂无交付成果</p>
-                    <p className="text-xs mt-1">请使用上方按钮添加输出</p>
-                  </div>
-                )}
-              </div>
-              
-              {/* 3D Preview Panel (Conditional) */}
-              {show3DPreview && (
-                <div className="flex-1 bg-slate-800 rounded-lg overflow-hidden relative flex flex-col min-h-[300px]">
-                  <div className="absolute top-0 left-0 right-0 z-10 bg-slate-900/80 p-3 flex justify-between items-center text-white">
-                     <span className="text-xs font-mono flex items-center gap-2"><Box size={14}/> {currentStpFile} (预览模式)</span>
-                     <button onClick={() => setShow3DPreview(false)} className="hover:text-red-400"><X size={16}/></button>
-                  </div>
-                  <div className="flex-1 relative">
-                    <ThreeViewer isActive={show3DPreview} />
-                    <div className="absolute bottom-4 left-4 text-xs text-slate-400 pointer-events-none">
-                      使用鼠标左键旋转 (模拟)
-                    </div>
-                  </div>
-                </div>
-              )}
-
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  if (loading) return <div className="h-screen flex items-center justify-center text-slate-500">正在连接云端服务...</div>;
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
-      {/* Navbar */}
-      <nav className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-blue-600 text-white p-2 rounded-lg">
-              <Box size={24} />
-            </div>
-            <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
-              ReqManage 需求工场
-            </span>
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0 transition-all duration-300">
+        <div className="p-6 flex items-center gap-3 border-b border-slate-800">
+          <div className="bg-blue-600 p-2 rounded-lg">
+            <Box size={20} className="text-white" />
           </div>
-          <div className="flex items-center gap-4">
-            <div className="hidden md:flex text-sm text-slate-500 gap-6">
-              <span className="hover:text-blue-600 cursor-pointer">仪表盘</span>
-              <span className="hover:text-blue-600 cursor-pointer">项目归档</span>
-              <span className="hover:text-blue-600 cursor-pointer">团队管理</span>
-            </div>
-            <div className="h-8 w-8 rounded-full bg-slate-200 border-2 border-white shadow-sm overflow-hidden">
-               <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="User" />
-            </div>
-          </div>
+          <span className="text-lg font-bold tracking-tight">ReqMaster Pro</span>
         </div>
-      </nav>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto p-6">
-        {viewMode === 'list' && <ListView />}
-        {viewMode === 'create' && <CreateView />}
-        {viewMode === 'detail' && <DetailView />}
+        <nav className="flex-1 p-4 space-y-2">
+          <NavButton 
+            active={activeTab === 'dashboard'} 
+            onClick={() => { setActiveTab('dashboard'); setSelectedProject(null); }}
+            icon={<LayoutDashboard size={20}/>} 
+            label="仪表盘" 
+          />
+          <NavButton 
+            active={activeTab === 'projects' || activeTab === 'detail'} 
+            onClick={() => { setActiveTab('projects'); setSelectedProject(null); }}
+            icon={<FileText size={20}/>} 
+            label="项目管理" 
+            badge={projects.length}
+          />
+          <NavButton 
+            active={activeTab === 'team'} 
+            onClick={() => { setActiveTab('team'); setSelectedProject(null); }}
+            icon={<Users size={20}/>} 
+            label="团队成员" 
+          />
+        </nav>
+
+        <div className="p-4 border-t border-slate-800">
+          <button 
+             onClick={() => setActiveTab('settings')}
+             className="flex items-center gap-3 p-3 w-full hover:bg-slate-800 rounded-lg transition-colors mb-2"
+          >
+            <div className="w-8 h-8 rounded-full bg-slate-700 overflow-hidden border border-slate-600">
+              <img src={userData?.avatar} alt="Me" className="w-full h-full object-cover" />
+            </div>
+            <div className="flex-1 text-left">
+              <p className="text-sm font-medium truncate">{userData?.name}</p>
+              <p className="text-xs text-slate-400">{ROLES[userData?.role]?.label || '访客'}</p>
+            </div>
+            <Settings size={16} className="text-slate-400" />
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Area */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Top Header */}
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
+          <h2 className="text-lg font-semibold text-slate-800">
+            {activeTab === 'dashboard' && '概览仪表盘'}
+            {activeTab === 'projects' && '项目列表'}
+            {activeTab === 'detail' && '项目详情'}
+            {activeTab === 'team' && '团队列表'}
+            {activeTab === 'settings' && '个人设置'}
+          </h2>
+          <div className="flex items-center gap-4">
+             {/* Search could go here */}
+          </div>
+        </header>
+
+        {/* Content Scroll Area */}
+        <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
+          
+          {/* DASHBOARD VIEW */}
+          {activeTab === 'dashboard' && (
+            <DashboardView projects={projects} usersMap={usersMap} user={userData} onNavigate={() => setActiveTab('projects')} />
+          )}
+
+          {/* PROJECT LIST VIEW */}
+          {activeTab === 'projects' && (
+            <ProjectListView 
+              projects={projects} 
+              onSelect={(p) => { setSelectedProject(p); setActiveTab('detail'); }} 
+              onCreate={handleCreateProject}
+            />
+          )}
+
+          {/* PROJECT DETAIL VIEW */}
+          {activeTab === 'detail' && selectedProject && (
+             <ProjectDetailView 
+               project={selectedProject}
+               usersMap={usersMap}
+               currentUser={userData}
+               onBack={() => { setActiveTab('projects'); setSelectedProject(null); }}
+               onUpdateStatus={handleUpdateStatus}
+               onAddFile={handleAddFile}
+               onDelete={handleDeleteProject}
+             />
+          )}
+
+           {/* TEAM VIEW */}
+           {activeTab === 'team' && (
+             <TeamView usersMap={usersMap} />
+           )}
+
+           {/* SETTINGS VIEW */}
+           {activeTab === 'settings' && (
+             <SettingsView userData={userData} onUpdate={handleUpdateProfile} />
+           )}
+
+        </div>
       </main>
     </div>
   );
 }
+
+// --- Sub Components ---
+
+const NavButton = ({ active, onClick, icon, label, badge }) => (
+  <button 
+    onClick={onClick}
+    className={`w-full flex items-center justify-between p-3 rounded-lg transition-all ${
+      active ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+    }`}
+  >
+    <div className="flex items-center gap-3">
+      {icon}
+      <span className="font-medium">{label}</span>
+    </div>
+    {badge > 0 && (
+      <span className={`text-xs px-2 py-0.5 rounded-full ${active ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300'}`}>
+        {badge}
+      </span>
+    )}
+  </button>
+);
+
+const DashboardView = ({ projects, usersMap, user, onNavigate }) => {
+  const stats = useMemo(() => {
+    return {
+      total: projects.length,
+      pending: projects.filter(p => p.status === 'pending').length,
+      inProgress: projects.filter(p => p.status === 'in_progress' || p.status === 'review').length,
+      completed: projects.filter(p => p.status === 'completed').length
+    };
+  }, [projects]);
+
+  return (
+    <div className="space-y-6 max-w-6xl mx-auto">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">欢迎回来, {user?.name}</h1>
+          <p className="text-slate-500">这是今天的项目概况</p>
+        </div>
+        <button onClick={onNavigate} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm">
+          查看所有项目
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <StatCard title="总项目数" value={stats.total} icon={<Box size={24} className="text-blue-600"/>} bg="bg-blue-50" />
+        <StatCard title="待处理" value={stats.pending} icon={<Clock size={24} className="text-yellow-600"/>} bg="bg-yellow-50" />
+        <StatCard title="进行中" value={stats.inProgress} icon={<Activity size={24} className="text-purple-600"/>} bg="bg-purple-50" />
+        <StatCard title="已交付" value={stats.completed} icon={<CheckCircle size={24} className="text-green-600"/>} bg="bg-green-50" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
+            <PieChart size={18} className="text-slate-400"/> 项目状态分布
+          </h3>
+          <div className="h-48 flex items-end justify-around gap-4 px-4 pb-4 border-b border-slate-100">
+             {/* CSS only Bar Chart for simplicity */}
+             <Bar height={stats.total > 0 ? (stats.pending/stats.total)*100 : 0} color="bg-yellow-400" label="待处理" count={stats.pending} />
+             <Bar height={stats.total > 0 ? (stats.inProgress/stats.total)*100 : 0} color="bg-blue-500" label="进行中" count={stats.inProgress} />
+             <Bar height={stats.total > 0 ? (stats.completed/stats.total)*100 : 0} color="bg-green-500" label="已完成" count={stats.completed} />
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+          <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
+            <Clock size={18} className="text-slate-400"/> 最近更新
+          </h3>
+          <div className="flex-1 overflow-hidden space-y-4">
+            {projects.slice(0, 4).map(p => (
+              <div key={p.id} className="flex items-start gap-3 p-3 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer border border-transparent hover:border-slate-100">
+                <div className={`w-2 h-2 mt-2 rounded-full ${STATUS_MAP[p.status]?.color.split(' ')[0].replace('100', '500')}`}></div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-900 truncate">{p.title}</p>
+                  <p className="text-xs text-slate-500">
+                    {usersMap[p.createdBy]?.name || '未知用户'} • {new Date(p.updatedAt?.seconds * 1000).toLocaleDateString()}
+                  </p>
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_MAP[p.status]?.color}`}>
+                  {STATUS_MAP[p.status]?.label}
+                </span>
+              </div>
+            ))}
+            {projects.length === 0 && <p className="text-sm text-slate-400">暂无活动</p>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Bar = ({ height, color, label, count }) => (
+  <div className="flex flex-col items-center gap-2 w-16 group">
+    <div className="text-xs font-bold text-slate-700 opacity-0 group-hover:opacity-100 transition-opacity">{count}</div>
+    <div className={`w-full rounded-t-lg transition-all duration-500 ${color}`} style={{ height: `${Math.max(height, 5)}%` }}></div>
+    <div className="text-xs text-slate-500">{label}</div>
+  </div>
+);
+
+const StatCard = ({ title, value, icon, bg }) => (
+  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+    <div className={`p-3 rounded-lg ${bg}`}>
+      {icon}
+    </div>
+    <div>
+      <p className="text-sm text-slate-500 font-medium">{title}</p>
+      <p className="text-2xl font-bold text-slate-900">{value}</p>
+    </div>
+  </div>
+);
+
+const ProjectListView = ({ projects, onSelect, onCreate }) => {
+  const [showCreate, setShowCreate] = useState(false);
+  const [newProject, setNewProject] = useState({ title: '', description: '' });
+
+  const handleSubmit = () => {
+    if (!newProject.title) return alert("标题不能为空");
+    onCreate(newProject);
+    setShowCreate(false);
+    setNewProject({ title: '', description: '' });
+  };
+
+  if (showCreate) {
+    return (
+      <div className="max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-lg border border-slate-200">
+        <h2 className="text-xl font-bold mb-6">新建需求项目</h2>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">项目标题</label>
+            <input 
+              className="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"
+              value={newProject.title}
+              onChange={e => setNewProject({...newProject, title: e.target.value})}
+              placeholder="例如：2024 Q1 营销活动页面"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">需求描述</label>
+            <textarea 
+              className="w-full border border-slate-300 rounded-lg p-2 h-32 focus:ring-2 focus:ring-blue-500 outline-none"
+              value={newProject.description}
+              onChange={e => setNewProject({...newProject, description: e.target.value})}
+              placeholder="请详细描述需求背景、目标和具体要求..."
+            />
+          </div>
+          <div className="flex gap-3 pt-4">
+            <button onClick={handleSubmit} className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 font-medium">创建项目</button>
+            <button onClick={() => setShowCreate(false)} className="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg hover:bg-slate-200 font-medium">取消</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18}/>
+          <input 
+            type="text" 
+            placeholder="搜索项目..." 
+            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400"
+          />
+        </div>
+        <button 
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors shadow-sm font-medium"
+        >
+          <Plus size={18} /> 新建项目
+        </button>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <table className="w-full text-left border-collapse">
+          <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-semibold">
+            <tr>
+              <th className="px-6 py-4">项目名称</th>
+              <th className="px-6 py-4">状态</th>
+              <th className="px-6 py-4">负责人</th>
+              <th className="px-6 py-4">更新时间</th>
+              <th className="px-6 py-4">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {projects.map(p => (
+              <tr key={p.id} className="hover:bg-slate-50 group transition-colors">
+                <td className="px-6 py-4">
+                  <div className="font-medium text-slate-900">{p.title}</div>
+                  <div className="text-xs text-slate-500 truncate max-w-xs">{p.description}</div>
+                </td>
+                <td className="px-6 py-4">
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_MAP[p.status]?.color}`}>
+                     {STATUS_MAP[p.status]?.label}
+                  </span>
+                </td>
+                <td className="px-6 py-4 text-sm text-slate-600">
+                  {/* In a real app we would query the user name */}
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-slate-200 overflow-hidden">
+                       <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${p.createdBy}`} alt="" />
+                    </div>
+                    <span className="text-xs">用户 {p.createdBy.substring(0,4)}</span>
+                  </div>
+                </td>
+                <td className="px-6 py-4 text-sm text-slate-500">
+                  {p.updatedAt ? new Date(p.updatedAt.seconds * 1000).toLocaleDateString() : '-'}
+                </td>
+                <td className="px-6 py-4">
+                  <button 
+                    onClick={() => onSelect(p)}
+                    className="text-blue-600 hover:text-blue-800 text-sm font-medium hover:underline flex items-center gap-1"
+                  >
+                    详情 <ChevronRight size={14}/>
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {projects.length === 0 && (
+              <tr>
+                <td colSpan="5" className="px-6 py-12 text-center text-slate-400">
+                  暂无项目，点击右上角新建
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const ProjectDetailView = ({ project, usersMap, currentUser, onBack, onUpdateStatus, onAddFile, onDelete }) => {
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadType, setUploadType] = useState('inputs'); // 'inputs' or 'outputs'
+  
+  // State for upload form
+  const [fileUrl, setFileUrl] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [fileFormat, setFileFormat] = useState('doc'); // doc, image, stp
+  const [preview3D, setPreview3D] = useState(null); // url of stp to preview
+
+  const statusOptions = Object.keys(STATUS_MAP);
+
+  const handleFileSubmit = () => {
+    if(!fileUrl || !fileName) return alert("请填写完整信息");
+    onAddFile(project.id, {
+      name: fileName,
+      url: fileUrl,
+      format: fileFormat
+    }, uploadType);
+    setShowUpload(false);
+    setFileUrl('');
+    setFileName('');
+  };
+
+  return (
+    <div className="flex flex-col h-full gap-6">
+      {/* Detail Header */}
+      <div className="flex items-start justify-between border-b border-slate-200 pb-4">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors">
+            <MoreHorizontal size={20} className="rotate-180"/>
+          </button>
+          <div>
+            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-3">
+              {project.title}
+              <span className={`text-xs px-2 py-1 rounded-full font-normal ${STATUS_MAP[project.status]?.color}`}>
+                {STATUS_MAP[project.status]?.label}
+              </span>
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              创建人: {usersMap[project.createdBy]?.name || 'Unknown'} • 
+              创建于: {project.createdAt ? new Date(project.createdAt.seconds * 1000).toLocaleDateString() : '-'}
+            </p>
+          </div>
+        </div>
+        
+        <div className="flex gap-3">
+          {currentUser?.role === 'MANAGER' && (
+             <button onClick={() => onDelete(project.id)} className="text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg text-sm font-medium transition-colors">
+               删除项目
+             </button>
+          )}
+          <div className="flex bg-slate-100 p-1 rounded-lg">
+            {statusOptions.map(s => (
+              <button 
+                key={s}
+                onClick={() => onUpdateStatus(project.id, s)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  project.status === s ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {STATUS_MAP[s].label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-hidden">
+        
+        {/* Left: Requirements & Inputs */}
+        <div className="flex flex-col gap-6 overflow-y-auto pr-2">
+          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+            <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
+              <FileText className="text-blue-500" size={18}/> 需求描述
+            </h3>
+            <div className="prose prose-sm prose-slate max-w-none">
+              <p className="whitespace-pre-wrap text-slate-600">{project.description}</p>
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex-1">
+             <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+                  <Upload className="text-blue-500" size={18}/> 需求附件 (Inputs)
+                </h3>
+                <button 
+                  onClick={() => { setUploadType('inputs'); setShowUpload(true); }}
+                  className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-full font-medium transition-colors"
+                >
+                  + 添加附件
+                </button>
+             </div>
+             
+             <div className="space-y-3">
+               {project.inputs && project.inputs.length > 0 ? (
+                 project.inputs.map((file, idx) => (
+                   <FileCard key={idx} file={file} />
+                 ))
+               ) : (
+                 <div className="text-center py-8 bg-slate-50 rounded-lg border border-dashed border-slate-200 text-slate-400 text-sm">
+                   暂无需求文档
+                 </div>
+               )}
+             </div>
+          </div>
+        </div>
+
+        {/* Right: Outputs & Preview */}
+        <div className="flex flex-col gap-6 overflow-y-auto pr-2">
+          <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+                <Box className="text-green-600" size={18}/> 交付成果 (Outputs)
+              </h3>
+              <button 
+                onClick={() => { setUploadType('outputs'); setShowUpload(true); }}
+                className="text-xs bg-white hover:bg-blue-50 text-blue-600 border border-blue-200 px-3 py-1.5 rounded-full font-medium transition-colors shadow-sm"
+              >
+                + 提交成果
+              </button>
+            </div>
+
+            <div className="space-y-3 mb-6">
+               {project.outputs && project.outputs.length > 0 ? (
+                 project.outputs.map((file, idx) => (
+                   <FileCard 
+                      key={idx} 
+                      file={file} 
+                      onPreview3D={file.format === 'stp' ? (url) => setPreview3D(url) : null}
+                    />
+                 ))
+               ) : (
+                 <div className="text-center py-8 rounded-lg border border-dashed border-slate-300 text-slate-400 text-sm">
+                   暂无交付物，点击上方按钮提交
+                 </div>
+               )}
+            </div>
+
+            {/* 3D Preview Area */}
+            {preview3D && (
+              <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden relative min-h-[300px] flex flex-col border border-slate-700 shadow-lg">
+                <div className="bg-slate-800 px-4 py-2 flex justify-between items-center">
+                  <span className="text-xs text-slate-300 font-mono flex items-center gap-2"><Box size={14}/> 3D Preview Mode</span>
+                  <button onClick={() => setPreview3D(null)} className="text-slate-400 hover:text-white"><X size={16}/></button>
+                </div>
+                <div className="flex-1 relative">
+                  <ThreeViewer isActive={!!preview3D} modelUrl={preview3D} />
+                  {/* Overlay explaining standard demo limits */}
+                  <div className="absolute bottom-4 left-4 right-4 bg-black/50 text-white text-xs p-2 rounded backdrop-blur-sm pointer-events-none">
+                    注意：由于浏览器安全限制，此处展示通用模型。真实环境将加载: {preview3D.substring(0, 30)}...
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Upload Modal */}
+      {showUpload && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md animate-in fade-in zoom-in duration-200">
+            <h3 className="text-lg font-bold mb-4">
+              {uploadType === 'inputs' ? '上传需求附件' : '提交交付成果'}
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">文件名称</label>
+                <input 
+                  className="w-full border border-slate-300 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                  value={fileName}
+                  onChange={e => setFileName(e.target.value)}
+                  placeholder="例如：产品规格说明书_v1.pdf"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">文件类型</label>
+                <div className="flex gap-2">
+                   {['doc', 'image', 'stp'].map(t => (
+                     <button 
+                       key={t}
+                       onClick={() => setFileFormat(t)}
+                       className={`px-3 py-1 text-xs rounded border capitalize ${
+                         fileFormat === t ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-slate-200 text-slate-600'
+                       }`}
+                     >
+                       {t === 'doc' ? 'Document' : t === 'stp' ? '3D Model' : 'Image'}
+                     </button>
+                   ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                   文件链接 (URL)
+                   <span className="text-xs text-slate-400 ml-2 font-normal">支持 Google Drive, Dropbox, SharePoint</span>
+                </label>
+                <div className="flex gap-2">
+                   <div className="relative flex-1">
+                      <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/>
+                      <input 
+                        className="w-full border border-slate-300 rounded-lg pl-9 pr-2 py-2 text-sm outline-none focus:border-blue-500"
+                        value={fileUrl}
+                        onChange={e => setFileUrl(e.target.value)}
+                        placeholder="https://..."
+                      />
+                   </div>
+                </div>
+                <p className="text-xs text-amber-600 mt-2 bg-amber-50 p-2 rounded">
+                  提示：本环境未连接存储桶，请使用外部链接进行文件托管。
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button onClick={handleFileSubmit} className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-medium hover:bg-blue-700">确认添加</button>
+                <button onClick={() => setShowUpload(false)} className="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg font-medium hover:bg-slate-200">取消</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const FileCard = ({ file, onPreview3D }) => {
+  const isImage = file.format === 'image';
+  const is3D = file.format === 'stp';
+
+  return (
+    <div className="group flex items-start gap-3 p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-300 transition-colors shadow-sm">
+      <div className={`p-2 rounded-lg shrink-0 ${
+        is3D ? 'bg-blue-100 text-blue-600' : 
+        isImage ? 'bg-purple-100 text-purple-600' : 'bg-orange-100 text-orange-600'
+      }`}>
+        {is3D ? <Box size={20}/> : isImage ? <ImageIcon size={20}/> : <FileText size={20}/>}
+      </div>
+      
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-slate-800 truncate">{file.name}</p>
+        <div className="flex items-center gap-2 mt-1">
+          <span className="text-xs text-slate-400 uppercase bg-slate-100 px-1.5 rounded">{file.format}</span>
+          <span className="text-xs text-slate-400">{new Date(file.addedAt || Date.now()).toLocaleDateString()}</span>
+        </div>
+      </div>
+
+      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <a 
+          href={file.url} 
+          target="_blank" 
+          rel="noreferrer" 
+          className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded" 
+          title="下载/查看"
+        >
+          <Download size={16}/>
+        </a>
+        {is3D && onPreview3D && (
+          <button 
+            onClick={() => onPreview3D(file.url)}
+            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded"
+            title="3D预览"
+          >
+            <Eye size={16}/>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const SettingsView = ({ userData, onUpdate }) => {
+  const [name, setName] = useState(userData?.name || '');
+  const [role, setRole] = useState(userData?.role || 'GUEST');
+
+  useEffect(() => {
+    if(userData) {
+      setName(userData.name);
+      setRole(userData.role);
+    }
+  }, [userData]);
+
+  return (
+    <div className="max-w-xl mx-auto bg-white p-8 rounded-xl shadow-sm border border-slate-200">
+      <h2 className="text-xl font-bold text-slate-800 mb-6">个人设置</h2>
+      
+      <div className="flex items-center gap-6 mb-8">
+        <div className="w-20 h-20 rounded-full bg-slate-100 border-2 border-slate-200 overflow-hidden">
+          <img src={userData?.avatar} className="w-full h-full object-cover" alt="avatar" />
+        </div>
+        <div>
+          <p className="text-sm text-slate-500 mb-1">用户 ID</p>
+          <code className="bg-slate-100 px-2 py-1 rounded text-xs text-slate-600">{userData?.uid}</code>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">显示名称</label>
+          <input 
+            className="w-full border border-slate-300 rounded-lg p-2"
+            value={name}
+            onChange={e => setName(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">角色权限</label>
+          <select 
+            className="w-full border border-slate-300 rounded-lg p-2 bg-white"
+            value={role}
+            onChange={e => setRole(e.target.value)}
+          >
+            {Object.entries(ROLES).map(([key, val]) => (
+              <option key={key} value={key}>{val.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-500 mt-2">
+            * 经理拥有删除项目的权限，其他角色主要负责查看和更新状态。
+          </p>
+        </div>
+
+        <div className="pt-4">
+          <button 
+            onClick={() => onUpdate(name, role)}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors"
+          >
+            保存更改
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TeamView = ({ usersMap }) => (
+  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    {Object.values(usersMap).map(u => (
+      <div key={u.uid} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+        <div className="w-12 h-12 rounded-full bg-slate-100 overflow-hidden">
+          <img src={u.avatar} alt={u.name} />
+        </div>
+        <div>
+          <h3 className="font-medium text-slate-900">{u.name}</h3>
+          <span className={`text-xs px-2 py-0.5 rounded-full ${ROLES[u.role]?.color || 'bg-slate-100'}`}>
+            {ROLES[u.role]?.label || u.role}
+          </span>
+          <p className="text-xs text-slate-400 mt-1">ID: {u.uid.substring(0,6)}...</p>
+        </div>
+      </div>
+    ))}
+  </div>
+);
